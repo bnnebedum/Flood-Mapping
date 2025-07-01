@@ -1,1 +1,1 @@
-# Flood-Mapping-using-CNN-s
+# Flood-Mapping-using-CNNs
