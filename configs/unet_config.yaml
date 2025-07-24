@@ -1,0 +1,72 @@
+experiment_name: "unet_sar_flood_segmentation"
+output_dir: "/content/drive/MyDrive/experiments"
+random_seed: 42
+
+data:
+  drive_path: "/content/drive/MyDrive/Preprocessed-128"
+  train_dir: "train"
+  val_dir: "val"
+  test_dir: "test"
+  sar_subdir: "sar"
+  flood_subdir: "flood"
+  
+  image_size: [128, 128]
+  channels: 3
+  batch_size: 16
+  shuffle_buffer: 1000
+  prefetch_buffer: 2
+  
+  # Augmentation
+  enable_augmentation: true
+  rotation_range: 20.0
+  width_shift_range: 0.1
+  height_shift_range: 0.1
+  horizontal_flip: true
+  vertical_flip: true
+  zoom_range: 0.1
+
+# U-Net model configuration
+model:
+  name: "unet"
+  input_shape: [128, 128, 3]
+  num_classes: 1
+  
+  # U-Net architecture parameters
+  base_filters: 64          # Starting number of filters
+  depth: 4                  # Number of downsampling levels
+  dropout_rate: 0.5         # Dropout rate in bottleneck
+  batch_norm: true          # Use batch normalization
+  activation: "relu"        # Activation function
+  kernel_initializer: "he_normal"
+
+# Training configuration
+training:
+  epochs: 50
+  initial_lr: 0.001
+  min_lr: 1e-7
+  patience: 10
+  factor: 0.5
+  
+  # Loss
+  loss_function: "binary_crossentropy"
+  use_dice_loss: true
+  dice_weight: 0.5
+  
+  # Callbacks
+  early_stopping_patience: 15
+  save_best_only: true
+  save_weights_only: false
+  
+  # Optimizer
+  optimizer: "adam"
+  beta_1: 0.9
+  beta_2: 0.999
+  epsilon: 1e-7
+
+# Evaluation configuration
+evaluation:
+  metrics: ["pixel_accuracy", "dice_coefficient", "precision", "recall"]
+  threshold: 0.5
+  save_predictions: true
+  save_visualizations: true
+  visualization_samples: 20
