@@ -145,14 +145,81 @@ class FloodDataset:
         
         return matched_pairs
     
+    def _load_image_pair_direct(self, sar_path: str, flood_path: str):
+        """Load SAR and flood images directly from file paths (no bytes decoding)"""
+        try:
+            # Load SAR image (already preprocessed)
+            with rasterio.open(sar_path) as src:
+                sar_data = src.read([1, 2, 3])
+                sar_data = np.transpose(sar_data, (1, 2, 0)).astype(np.float32)
+            
+            # Load flood mask (already preprocessed) 
+            with rasterio.open(flood_path) as src:
+                flood_data = src.read(1)
+                flood_data = np.expand_dims(flood_data, axis=-1).astype(np.float32)
+            
+            # Ensure correct size
+            target_size = (self.config.image_size[0], self.config.image_size[1])
+            if sar_data.shape[:2] != target_size:
+                logger.warning(f"SAR image shape {sar_data.shape[:2]} != expected {target_size}")
+                from scipy.ndimage import zoom
+                zoom_factors = (target_size[0] / sar_data.shape[0], 
+                               target_size[1] / sar_data.shape[1], 1)
+                sar_data = zoom(sar_data, zoom_factors, order=1)
+            
+            if flood_data.shape[:2] != target_size:
+                logger.warning(f"Flood mask shape {flood_data.shape[:2]} != expected {target_size}")
+                from scipy.ndimage import zoom
+                zoom_factors = (target_size[0] / flood_data.shape[0], 
+                               target_size[1] / flood_data.shape[1], 1)
+                flood_data = zoom(flood_data, zoom_factors, order=0)
+            
+            # Ensure exact shapes and types
+            sar_data = sar_data.astype(np.float32)
+            flood_data = flood_data.astype(np.float32)
+            
+            # Verify shapes
+            expected_sar_shape = target_size + (3,)
+            expected_flood_shape = target_size + (1,)
+            
+            if sar_data.shape != expected_sar_shape:
+                sar_data = np.resize(sar_data, expected_sar_shape)
+                
+            if flood_data.shape != expected_flood_shape:
+                flood_data = np.resize(flood_data, expected_flood_shape)
+            
+            return sar_data, flood_data
+            
+        except Exception as e:
+            logger.error(f"Error loading {sar_path}: {e}")
+            # Return zeros if loading fails
+            target_size = (self.config.image_size[0], self.config.image_size[1])
+            return (np.zeros(target_size + (3,), dtype=np.float32), 
+                   np.zeros(target_size + (1,), dtype=np.float32))
+    
     def _data_generator(self, matched_pairs, training: bool):
         """Generator function that yields numpy arrays"""
         for sar_file, flood_file in matched_pairs:
             try:
+                # Call loading functions directly with file path objects
+                sar_path = str(sar_file)
+                flood_path = str(flood_file)
+                
+                # Load images directly without going through the old bytes-based functions
+                sar_data, flood_data = self._load_image_pair_direct(sar_path, flood_path)
+                
+                # Apply augmentation if training
                 if training:
-                    sar_data, flood_data = self._load_training_pair(str(sar_file).encode('utf-8'), str(flood_file).encode('utf-8'))
-                else:
-                    sar_data, flood_data = self._load_validation_pair(str(sar_file).encode('utf-8'), str(flood_file).encode('utf-8'))
+                    sar_data, flood_data = self._augment_pair(sar_data, flood_data)
+                
+                # Ensure data is numpy arrays with correct dtype
+                sar_data = np.asarray(sar_data, dtype=np.float32)
+                flood_data = np.asarray(flood_data, dtype=np.float32)
+                
+                # Debug: print first few only to avoid spam
+                if sar_file == matched_pairs[0][0]:  # Only print for first file
+                    print(f"[GENERATOR DEBUG] SAR type: {type(sar_data)}, dtype: {sar_data.dtype}, shape: {sar_data.shape}")
+                    print(f"[GENERATOR DEBUG] Flood type: {type(flood_data)}, dtype: {flood_data.dtype}, shape: {flood_data.shape}")
                 
                 yield sar_data, flood_data
             except Exception as e:

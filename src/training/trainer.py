@@ -137,6 +137,18 @@ class FloodSegmentationTrainer:
         """Execute training loop"""
         logger.info("Starting training...")
         
+        # DEBUG: Test dataset before training
+        print("DEBUG: Testing dataset output types...")
+        try:
+            for i, (sar_batch, flood_batch) in enumerate(self.train_dataset.take(1)):
+                print(f"SAR batch dtype: {sar_batch.dtype}, shape: {sar_batch.shape}")
+                print(f"Flood batch dtype: {flood_batch.dtype}, shape: {flood_batch.shape}")
+                print(f"SAR min/max: {tf.reduce_min(sar_batch):.3f}/{tf.reduce_max(sar_batch):.3f}")
+                print(f"Flood min/max: {tf.reduce_min(flood_batch):.3f}/{tf.reduce_max(flood_batch):.3f}")
+                break
+        except Exception as e:
+            print(f"DEBUG: Dataset test failed: {e}")
+        
         callback_list = create_training_callbacks(self.config, self.experiment_dir)
         
         start_time = time.time()
