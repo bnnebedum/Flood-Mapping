@@ -65,29 +65,9 @@ class FloodDataset:
         mask = tf.where(mask > 0, 1.0, 0.0)
         return mask
     
-    def _load_image_pair(self, sar_path: tf.Tensor, flood_path: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
-        """Load SAR and flood mask image pair"""
-        # Load SAR image
-        sar_image = tf.py_function(
-            func=self._load_tiff_image,
-            inp=[sar_path, 3],  # 3 channels for SAR
-            Tout=tf.float32
-        )
-        sar_image.set_shape([self.config.image_size[0], self.config.image_size[1], 3])
-        
-        # Load flood mask
-        flood_mask = tf.py_function(
-            func=self._load_tiff_image,
-            inp=[flood_path, 1],  # 1 channel for mask
-            Tout=tf.float32
-        )
-        flood_mask.set_shape([self.config.image_size[0], self.config.image_size[1], 1])
-        
-        return sar_image, flood_mask
-    
-    def _load_tiff_image(self, path: tf.Tensor, channels: int) -> tf.Tensor:
-        """Load TIFF image using rasterio"""
-        path_str = path.numpy().decode('utf-8')
+    def _load_tiff_image_py(self, path_bytes, channels):
+        """Load TIFF image using rasterio - pure Python function"""
+        path_str = path_bytes.numpy().decode('utf-8') if hasattr(path_bytes, 'numpy') else str(path_bytes)
         
         try:
             with rasterio.open(path_str) as src:
@@ -110,6 +90,25 @@ class FloodDataset:
             else:
                 return np.zeros((self.config.image_size[0], self.config.image_size[1], 1), dtype=np.float32)
     
+    def _load_image_pair(self, sar_path: tf.Tensor, flood_path: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+        """Load SAR and flood mask image pair"""
+        
+        sar_image = tf.py_function(
+            func=self._load_tiff_image_py,
+            inp=[sar_path, 3],  # 3 channels for SAR
+            Tout=tf.float32
+        )
+        sar_image.set_shape([self.config.image_size[0], self.config.image_size[1], 3])
+        
+        flood_mask = tf.py_function(
+            func=self._load_tiff_image_py,
+            inp=[flood_path, 1],  # 1 channel for mask
+            Tout=tf.float32
+        )
+        flood_mask.set_shape([self.config.image_size[0], self.config.image_size[1], 1])
+        
+        return sar_image, flood_mask
+    
     def _augment_pair(self, sar_image: tf.Tensor, flood_mask: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
         """Apply augmentation to SAR image and flood mask pair"""
         if not self.config.enable_augmentation:
@@ -118,11 +117,9 @@ class FloodDataset:
         # Concatenate for synchronized augmentation
         combined = tf.concat([sar_image, flood_mask], axis=-1)
         
-        # Random horizontal flip
         if self.config.horizontal_flip:
             combined = tf.image.random_flip_left_right(combined)
         
-        # Random vertical flip
         if self.config.vertical_flip:
             combined = tf.image.random_flip_up_down(combined)
         
@@ -155,7 +152,7 @@ class FloodDataset:
     
     def _process_pair(self, sar_path: tf.Tensor, flood_path: tf.Tensor, training: bool = False) -> Tuple[tf.Tensor, tf.Tensor]:
         """Process a single SAR-flood pair"""
-        
+        # Load images
         sar_image, flood_mask = self._load_image_pair(sar_path, flood_path)
         
         # Apply augmentation if training
@@ -170,7 +167,7 @@ class FloodDataset:
     
     def create_dataset(self, split: str, training: bool = False) -> tf.data.Dataset:
         """Create TensorFlow dataset for specified split"""
-
+        # Get file paths
         sar_dir = Path(self.config.drive_path) / split / self.config.sar_subdir
         flood_dir = Path(self.config.drive_path) / split / self.config.flood_subdir
         
@@ -194,11 +191,21 @@ class FloodDataset:
         
         dataset = tf.data.Dataset.from_tensor_slices((sar_paths, flood_paths))
         
-        # Apply processing
+        # Apply processing with proper error handling
         dataset = dataset.map(
-            lambda sar_path, flood_path: self._process_pair(sar_path, flood_path, training),
+            lambda sar_path, flood_path: tf.py_function(
+                func=self._process_pair_wrapper,
+                inp=[sar_path, flood_path, training],
+                Tout=[tf.float32, tf.float32]
+            ),
             num_parallel_calls=tf.data.AUTOTUNE
         )
+        
+        # Set shapes explicitly
+        dataset = dataset.map(lambda x, y: (
+            tf.ensure_shape(x, [self.config.image_size[0], self.config.image_size[1], 3]),
+            tf.ensure_shape(y, [self.config.image_size[0], self.config.image_size[1], 1])
+        ))
         
         # Configure dataset
         if training:
@@ -209,6 +216,26 @@ class FloodDataset:
         dataset = dataset.prefetch(self.config.prefetch_buffer)
         
         return dataset
+    
+    def _process_pair_wrapper(self, sar_path, flood_path, training):
+        """Wrapper for _process_pair to work with tf.py_function"""
+        # Load images using rasterio
+        sar_image = self._load_tiff_image_py(sar_path, 3)
+        flood_mask = self._load_tiff_image_py(flood_path, 1)
+        
+        # Convert to tensors
+        sar_tensor = tf.constant(sar_image)
+        flood_tensor = tf.constant(flood_mask)
+        
+        # Apply augmentation if training
+        if training:
+            sar_tensor, flood_tensor = self._augment_pair(sar_tensor, flood_tensor)
+        
+        # Normalize
+        sar_tensor = self._normalize_sar(sar_tensor)
+        flood_tensor = self._normalize_mask(flood_tensor)
+        
+        return sar_tensor, flood_tensor
     
     def _match_file_pairs(self, sar_files: List[Path], flood_files: List[Path]) -> List[Tuple[Path, Path]]:
         """Match SAR and flood files based on naming convention"""
@@ -230,6 +257,7 @@ class FloodDataset:
                 
                 flood_base = flood_base.replace("_flood", "")
                 
+                # Check for match
                 if sar_base == flood_base:
                     matched_pairs.append((sar_file, flood_file))
                     break

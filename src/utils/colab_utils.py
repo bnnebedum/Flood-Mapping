@@ -167,7 +167,6 @@ class DataManager:
         """Print a summary of the data structure"""
         verification = self.verify_data_structure(data_dir)
         
-        print("=== DATA STRUCTURE VERIFICATION ===")
         print(f"Data path exists: {verification['data_path_exists']}")
         print(f"Total files: {verification['total_files']}")
         print()
