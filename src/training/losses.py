@@ -139,6 +139,20 @@ class CombinedLoss:
             total_loss += self.tversky_weight * tversky
         
         return total_loss
+    
+    def get_config(self):
+        """Get configuration for serialization"""
+        return {
+            'bce_weight': self.bce_weight,
+            'dice_weight': self.dice_weight,
+            'focal_weight': self.focal_weight,
+            'tversky_weight': self.tversky_weight
+        }
+    
+    @classmethod
+    def from_config(cls, config):
+        """Create instance from configuration"""
+        return cls(**config)
 
 def get_loss_function(loss_name: str, **kwargs) -> tf.keras.losses.Loss:
     """Factory function to get loss function by name"""

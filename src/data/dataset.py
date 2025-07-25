@@ -1,5 +1,5 @@
 """
-TensorFlow dataset creation with augmentation for SAR flood mapping
+TensorFlow dataset creation - CORRECTED VERSION (no double normalization)
 """
 import tensorflow as tf
 import numpy as np
@@ -13,104 +13,95 @@ from ..utils.config import DataConfig
 logger = logging.getLogger(__name__)
 
 class FloodDataset:
-    """Dataset class for SAR flood mapping with proper augmentation"""
+    """Dataset class for SAR flood mapping - loads preprocessed data"""
     
     def __init__(self, config: DataConfig):
         self.config = config
-        self.normalization_stats = self._load_normalization_stats()
+        # Note: normalization_stats not needed since data is already preprocessed
     
-    def _load_normalization_stats(self) -> Optional[dict]:
-        """Load normalization statistics from preprocessing"""
-        stats_path = Path(self.config.drive_path) / "metadata" / "normalization_stats.json"
-        if not stats_path.exists():
-            stats_path = Path(self.config.drive_path) / "normalization_stats.json"
+    def _load_and_process_pair(self, sar_path_tensor, flood_path_tensor, training_flag_tensor):
+        """Load and process SAR-flood pair - CORRECTED VERSION"""
         
-        if stats_path.exists():
-            import json
-            with open(stats_path, 'r') as f:
-                return json.load(f)
-        else:
-            logger.warning("Normalization stats not found. Using default values.")
-            return None
-    
-    def _process_pair_numpy(self, sar_path_bytes, flood_path_bytes, training_flag):
-        """Process SAR-flood pair using NumPy"""
-        # Decode paths
-        sar_path = sar_path_bytes.numpy().decode('utf-8') if hasattr(sar_path_bytes, 'numpy') else str(sar_path_bytes)
-        flood_path = flood_path_bytes.numpy().decode('utf-8') if hasattr(flood_path_bytes, 'numpy') else str(flood_path_bytes)
-        training = training_flag.numpy() if hasattr(training_flag, 'numpy') else bool(training_flag)
+        def _process_images(sar_path_bytes, flood_path_bytes, training_flag_bytes):
+            # Decode bytes to strings
+            sar_path = sar_path_bytes.decode('utf-8')
+            flood_path = flood_path_bytes.decode('utf-8')
+            training = bool(training_flag_bytes)
+            
+            try:
+                with rasterio.open(sar_path) as src:
+                    sar_data = src.read([1, 2, 3])
+                    sar_data = np.transpose(sar_data, (1, 2, 0)).astype(np.float32)
+                
+                with rasterio.open(flood_path) as src:
+                    flood_data = src.read(1)
+                    flood_data = np.expand_dims(flood_data, axis=-1).astype(np.float32)
+                
+                target_size = (self.config.image_size[0], self.config.image_size[1])
+                if sar_data.shape[:2] != target_size:
+                    logger.warning(f"SAR image shape {sar_data.shape[:2]} != expected {target_size}")
+                    from scipy.ndimage import zoom
+                    zoom_factors = (target_size[0] / sar_data.shape[0], 
+                                   target_size[1] / sar_data.shape[1], 1)
+                    sar_data = zoom(sar_data, zoom_factors, order=1)
+                
+                if flood_data.shape[:2] != target_size:
+                    logger.warning(f"Flood mask shape {flood_data.shape[:2]} != expected {target_size}")
+                    from scipy.ndimage import zoom
+                    zoom_factors = (target_size[0] / flood_data.shape[0], 
+                                   target_size[1] / flood_data.shape[1], 1)
+                    flood_data = zoom(flood_data, zoom_factors, order=0)
+                
+                # Apply augmentation if training
+                if training and self.config.enable_augmentation:
+                    if self.config.horizontal_flip and np.random.random() > 0.5:
+                        sar_data = np.fliplr(sar_data)
+                        flood_data = np.fliplr(flood_data)
+                    
+                    if self.config.vertical_flip and np.random.random() > 0.5:
+                        sar_data = np.flipud(sar_data)
+                        flood_data = np.flipud(flood_data)
+                    
+                    # Random 90-degree rotation
+                    if self.config.rotation_range > 0 and np.random.random() > 0.5:
+                        k = np.random.randint(0, 4)
+                        sar_data = np.rot90(sar_data, k)
+                        flood_data = np.rot90(flood_data, k)
+                
+                sar_data = sar_data.astype(np.float32)
+                flood_data = flood_data.astype(np.float32)
+                
+                # Verify shapes
+                expected_sar_shape = target_size + (3,)
+                expected_flood_shape = target_size + (1,)
+                
+                if sar_data.shape != expected_sar_shape:
+                    logger.warning(f"Resizing SAR from {sar_data.shape} to {expected_sar_shape}")
+                    sar_data = np.resize(sar_data, expected_sar_shape)
+                    
+                if flood_data.shape != expected_flood_shape:
+                    logger.warning(f"Resizing flood mask from {flood_data.shape} to {expected_flood_shape}")
+                    flood_data = np.resize(flood_data, expected_flood_shape)
+                
+                return sar_data, flood_data
+                
+            except Exception as e:
+                logger.error(f"Error loading {sar_path}: {e}")
+                # Return zeros if loading fails
+                target_size = (self.config.image_size[0], self.config.image_size[1])
+                return (np.zeros(target_size + (3,), dtype=np.float32), 
+                       np.zeros(target_size + (1,), dtype=np.float32))
         
-        try:
-            # Load SAR image
-            with rasterio.open(sar_path) as src:
-                sar_data = src.read([1, 2, 3])
-                sar_data = np.transpose(sar_data, (1, 2, 0)).astype(np.float32)
-            
-            # Load flood mask
-            with rasterio.open(flood_path) as src:
-                flood_data = src.read(1)
-                flood_data = np.expand_dims(flood_data, axis=-1).astype(np.float32)
-            
-            # Ensure correct size
-            target_size = (self.config.image_size[0], self.config.image_size[1])
-            if sar_data.shape[:2] != target_size:
-                from scipy.ndimage import zoom
-                zoom_factors = (target_size[0] / sar_data.shape[0], 
-                               target_size[1] / sar_data.shape[1], 1)
-                sar_data = zoom(sar_data, zoom_factors, order=1)
-            
-            if flood_data.shape[:2] != target_size:
-                from scipy.ndimage import zoom
-                zoom_factors = (target_size[0] / flood_data.shape[0], 
-                               target_size[1] / flood_data.shape[1], 1)
-                flood_data = zoom(flood_data, zoom_factors, order=0)
-            
-            # Apply simple augmentation with NumPy if training
-            if training:
-                if self.config.horizontal_flip and np.random.random() > 0.5:
-                    sar_data = np.fliplr(sar_data)
-                    flood_data = np.fliplr(flood_data)
-                
-                if self.config.vertical_flip and np.random.random() > 0.5:
-                    sar_data = np.flipud(sar_data)
-                    flood_data = np.flipud(flood_data)
-                
-                # Random 90-degree rotation
-                if self.config.rotation_range > 0 and np.random.random() > 0.5:
-                    k = np.random.randint(0, 4)
-                    sar_data = np.rot90(sar_data, k)
-                    flood_data = np.rot90(flood_data, k)
-            
-            # Normalize SAR using NumPy
-            if self.normalization_stats is not None:
-                means = np.array(self.normalization_stats['mean'], dtype=np.float32)
-                stds = np.array(self.normalization_stats['std'], dtype=np.float32)
-                
-                # Normalize to [0, 1]
-                sar_data = sar_data / 255.0
-                
-                # Apply log transform
-                sar_data = np.log1p(sar_data)
-                
-                # Standardize
-                means_log = np.log1p(means / 255.0)
-                stds_log = stds / 255.0
-                sar_data = (sar_data - means_log) / (stds_log + 1e-8)
-            else:
-                # Fallback normalization
-                sar_data = sar_data / 255.0
-                sar_data = (sar_data - 0.5) / 0.5
-            
-            # Normalize flood mask to binary
-            flood_data = (flood_data > 0).astype(np.float32)
-            
-            return sar_data.astype(np.float32), flood_data.astype(np.float32)
-            
-        except Exception as e:
-            logger.error(f"Error loading {sar_path}: {e}")
-            # Return zeros if loading fails
-            return (np.zeros(target_size + (3,), dtype=np.float32), 
-                   np.zeros(target_size + (1,), dtype=np.float32))
+        sar_img, flood_img = tf.py_function(
+            func=_process_images,
+            inp=[sar_path_tensor, flood_path_tensor, training_flag_tensor],
+            Tout=[tf.float32, tf.float32]
+        )
+        
+        sar_img.set_shape([self.config.image_size[0], self.config.image_size[1], 3])
+        flood_img.set_shape([self.config.image_size[0], self.config.image_size[1], 1])
+        
+        return sar_img, flood_img
     
     def _match_file_pairs(self, sar_files: List[Path], flood_files: List[Path]) -> List[Tuple[Path, Path]]:
         """Match SAR and flood files based on naming convention"""
@@ -163,25 +154,23 @@ class FloodDataset:
         # Create dataset from file paths
         sar_paths = [str(pair[0]) for pair in matched_pairs]
         flood_paths = [str(pair[1]) for pair in matched_pairs]
+        training_flags = [training] * len(matched_pairs)
         
-        dataset = tf.data.Dataset.from_tensor_slices((sar_paths, flood_paths))
+        dataset = tf.data.Dataset.from_tensor_slices({
+            'sar_path': sar_paths,
+            'flood_path': flood_paths,
+            'training': training_flags
+        })
         
         dataset = dataset.map(
-            lambda sar_path, flood_path: tf.py_function(
-                func=self._process_pair_numpy,
-                inp=[sar_path, flood_path, training],
-                Tout=[tf.float32, tf.float32]
+            lambda x: self._load_and_process_pair(
+                x['sar_path'], 
+                x['flood_path'], 
+                x['training']
             ),
             num_parallel_calls=tf.data.AUTOTUNE
         )
         
-        # Set shapes explicitly
-        dataset = dataset.map(lambda x, y: (
-            tf.ensure_shape(x, [self.config.image_size[0], self.config.image_size[1], 3]),
-            tf.ensure_shape(y, [self.config.image_size[0], self.config.image_size[1], 1])
-        ))
-        
-        # Configure dataset
         if training:
             dataset = dataset.shuffle(self.config.shuffle_buffer)
             dataset = dataset.repeat()
