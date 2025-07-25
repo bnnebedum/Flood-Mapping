@@ -138,7 +138,7 @@ def create_training_callbacks(config: ExperimentConfig, experiment_dir: Path) ->
         log_dir=str(tensorboard_dir),
         histogram_freq=1,
         write_graph=True,
-        write_images=True,
+        write_images=False,
         update_freq='epoch'
     )
     callback_list.append(tensorboard)
