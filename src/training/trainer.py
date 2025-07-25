@@ -137,17 +137,42 @@ class FloodSegmentationTrainer:
         """Execute training loop"""
         logger.info("Starting training...")
         
-        # DEBUG: Test dataset before training
+        # DEBUG: Test dataset before training  
         print("DEBUG: Testing dataset output types...")
+        print("DEBUG: Testing with smaller batch first...")
         try:
+            import time
+            
+            # Test with single sample first
+            print("DEBUG: Testing single sample...")
+            start_time = time.time()
+            single_dataset = self.train_dataset.batch(1).take(1)
+            
+            for i, (sar_batch, flood_batch) in enumerate(single_dataset):
+                elapsed = time.time() - start_time
+                print(f"DEBUG: Single sample loaded in {elapsed:.1f} seconds")
+                print(f"SAR sample dtype: {sar_batch.dtype}, shape: {sar_batch.shape}")
+                print(f"Flood sample dtype: {flood_batch.dtype}, shape: {flood_batch.shape}")
+                break
+            
+            print("DEBUG: Single sample test successful! Now testing full batch...")
+            start_time = time.time()
+            
             for i, (sar_batch, flood_batch) in enumerate(self.train_dataset.take(1)):
+                elapsed = time.time() - start_time
+                print(f"DEBUG: Full batch loaded in {elapsed:.1f} seconds")
                 print(f"SAR batch dtype: {sar_batch.dtype}, shape: {sar_batch.shape}")
                 print(f"Flood batch dtype: {flood_batch.dtype}, shape: {flood_batch.shape}")
                 print(f"SAR min/max: {tf.reduce_min(sar_batch):.3f}/{tf.reduce_max(sar_batch):.3f}")
                 print(f"Flood min/max: {tf.reduce_min(flood_batch):.3f}/{tf.reduce_max(flood_batch):.3f}")
                 break
+                
+            print("DEBUG: Dataset test completed successfully!")
+            
         except Exception as e:
             print(f"DEBUG: Dataset test failed: {e}")
+            import traceback
+            traceback.print_exc()
         
         callback_list = create_training_callbacks(self.config, self.experiment_dir)
         
