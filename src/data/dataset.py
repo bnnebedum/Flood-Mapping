@@ -202,14 +202,6 @@ class FloodDataset:
             num_parallel_calls=tf.data.AUTOTUNE
         )
         
-        # Set shapes explicitly
-        dataset = dataset.map(
-            lambda sar, flood: (
-                tf.ensure_shape(sar, [self.config.image_size[0], self.config.image_size[1], 3]),
-                tf.ensure_shape(flood, [self.config.image_size[0], self.config.image_size[1], 1])
-            )
-        )
-        
         # DEBUG: Add debug prints to verify tensor types and shapes
         def debug_tensor_info(sar, flood):
             """Debug function to print tensor information"""
