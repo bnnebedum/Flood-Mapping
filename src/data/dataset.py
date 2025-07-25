@@ -145,6 +145,23 @@ class FloodDataset:
         
         return matched_pairs
     
+    def _data_generator(self, matched_pairs, training: bool):
+        """Generator function that yields numpy arrays"""
+        for sar_file, flood_file in matched_pairs:
+            try:
+                if training:
+                    sar_data, flood_data = self._load_training_pair(str(sar_file).encode('utf-8'), str(flood_file).encode('utf-8'))
+                else:
+                    sar_data, flood_data = self._load_validation_pair(str(sar_file).encode('utf-8'), str(flood_file).encode('utf-8'))
+                
+                yield sar_data, flood_data
+            except Exception as e:
+                logger.error(f"Error loading {sar_file}: {e}")
+                # Return zeros if loading fails
+                target_size = (self.config.image_size[0], self.config.image_size[1])
+                yield (np.zeros(target_size + (3,), dtype=np.float32), 
+                       np.zeros(target_size + (1,), dtype=np.float32))
+    
     def create_dataset(self, split: str, training: bool = False) -> tf.data.Dataset:
         """Create TensorFlow dataset for specified split"""
         sar_dir = Path(self.config.drive_path) / split / self.config.sar_subdir
@@ -169,52 +186,19 @@ class FloodDataset:
             print(f"  {i+1}. SAR: {sar_file.name}")
             print(f"     Flood: {flood_file.name}")
         
-        # Create file path lists
-        sar_paths = [str(pair[0]) for pair in matched_pairs]
-        flood_paths = [str(pair[1]) for pair in matched_pairs]
-        
         # DEBUG: Print dataset creation info
         print(f"[DEBUG] Creating dataset for {split} with training={training}")
-        print(f"[DEBUG] Total paths: {len(sar_paths)} SAR, {len(flood_paths)} flood")
+        print(f"[DEBUG] Total paths: {len(matched_pairs)} matched pairs")
         
-        # Create dataset from file paths
-        dataset = tf.data.Dataset.from_tensor_slices((sar_paths, flood_paths))
-        
-        # Choose processing function based on training mode
-        if training:
-            process_func = self._load_training_pair
-        else:
-            process_func = self._load_validation_pair
-        
-        # Map processing function
-        def process_wrapper(sar_path, flood_path):
-            sar, flood = tf.py_function(
-                func=process_func,
-                inp=[sar_path, flood_path],
-                Tout=[tf.float32, tf.float32]
+        # Create dataset from generator - this avoids tf.py_function completely
+        dataset = tf.data.Dataset.from_generator(
+            lambda: self._data_generator(matched_pairs, training),
+            output_signature=(
+                tf.TensorSpec(shape=(self.config.image_size[0], self.config.image_size[1], 3), dtype=tf.float32),
+                tf.TensorSpec(shape=(self.config.image_size[0], self.config.image_size[1], 1), dtype=tf.float32)
             )
-            sar.set_shape([self.config.image_size[0], self.config.image_size[1], 3])
-            flood.set_shape([self.config.image_size[0], self.config.image_size[1], 1])
-            return sar, flood
-        
-        dataset = dataset.map(
-            process_wrapper,
-            num_parallel_calls=tf.data.AUTOTUNE
         )
         
-        # DEBUG: Add debug prints to verify tensor types and shapes
-        def debug_tensor_info(sar, flood):
-            """Debug function to print tensor information"""
-            tf.print("SAR - Shape:", tf.shape(sar), "Dtype:", sar.dtype)
-            tf.print("Flood - Shape:", tf.shape(flood), "Dtype:", flood.dtype)
-            tf.print("SAR min/max:", tf.reduce_min(sar), "/", tf.reduce_max(sar))
-            tf.print("Flood min/max:", tf.reduce_min(flood), "/", tf.reduce_max(flood))
-            tf.print("SAR has NaN:", tf.reduce_any(tf.math.is_nan(sar)))
-            tf.print("Flood has NaN:", tf.reduce_any(tf.math.is_nan(flood)))
-            return sar, flood
-        
-        # Apply debug function (remove this after confirming it works)
-        dataset = dataset.map(debug_tensor_info)
         
         # Configure dataset
         if training:
