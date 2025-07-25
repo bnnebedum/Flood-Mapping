@@ -187,12 +187,18 @@ class FloodDataset:
             process_func = self._load_validation_pair
         
         # Map processing function
-        dataset = dataset.map(
-            lambda sar_path, flood_path: tf.py_function(
+        def process_wrapper(sar_path, flood_path):
+            sar, flood = tf.py_function(
                 func=process_func,
                 inp=[sar_path, flood_path],
                 Tout=[tf.float32, tf.float32]
-            ),
+            )
+            sar.set_shape([self.config.image_size[0], self.config.image_size[1], 3])
+            flood.set_shape([self.config.image_size[0], self.config.image_size[1], 1])
+            return sar, flood
+        
+        dataset = dataset.map(
+            process_wrapper,
             num_parallel_calls=tf.data.AUTOTUNE
         )
         
