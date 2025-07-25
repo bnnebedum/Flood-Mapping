@@ -207,12 +207,12 @@ class FloodDataset:
         # DEBUG: Add debug prints to verify tensor types and shapes
         def debug_tensor_info(sar, flood):
             """Debug function to print tensor information"""
-            tf.print(f"SAR - Shape: {tf.shape(sar)}, Dtype: {sar.dtype}")
-            tf.print(f"Flood - Shape: {tf.shape(flood)}, Dtype: {flood.dtype}")
-            tf.print(f"SAR min/max: {tf.reduce_min(sar):.3f} / {tf.reduce_max(sar):.3f}")
-            tf.print(f"Flood min/max: {tf.reduce_min(flood):.3f} / {tf.reduce_max(flood):.3f}")
-            tf.print(f"SAR has NaN: {tf.reduce_any(tf.math.is_nan(sar))}")
-            tf.print(f"Flood has NaN: {tf.reduce_any(tf.math.is_nan(flood))}")
+            tf.print("SAR - Shape:", tf.shape(sar), "Dtype:", sar.dtype)
+            tf.print("Flood - Shape:", tf.shape(flood), "Dtype:", flood.dtype)
+            tf.print("SAR min/max:", tf.reduce_min(sar), "/", tf.reduce_max(sar))
+            tf.print("Flood min/max:", tf.reduce_min(flood), "/", tf.reduce_max(flood))
+            tf.print("SAR has NaN:", tf.reduce_any(tf.math.is_nan(sar)))
+            tf.print("Flood has NaN:", tf.reduce_any(tf.math.is_nan(flood)))
             return sar, flood
         
         # Apply debug function (remove this after confirming it works)
